@@ -1,6 +1,10 @@
 require("dotenv").config();
 
-const puppeteer = require("puppeteer");
+const PersonalCapital = require("personal-capital-sdk").PersonalCapital;
+const TwoFactorMode = require("personal-capital-sdk").TwoFactorMode;
+const puppeteer = require("puppeteer-core");
+const got = require("got");
+
 const args = [
   "--disable-web-security",
   "--disable-features=IsolateOrigins,site-per-process",
@@ -13,7 +17,10 @@ const args = [
 
   console.log("Starting browser...");
 
-  const browser = await puppeteer.launch({ headless: true, args });
+  const browser = await puppeteer.connect({
+    browserWSEndpoint: `wss://chrome.browserless.io?token=${process.env.BROWSERLESS_KEY}`,
+    args,
+  });
 
   console.log("Navigating to LSB...");
 
@@ -89,13 +96,48 @@ const args = [
       ).innerText
   );
 
-  let formattedPortfolioValue = portfolioValue.replace(/[,.]/g, (x) => {
-    return x == "." ? "," : ".";
+  let portfolioValueDKK = portfolioValue.replace(/[,.]/g, (x) => {
+    return x == "." ? "" : ".";
   });
-
-  console.log("Portfolio value is: ", formattedPortfolioValue);
-
-  console.log("Done 👋");
+  portfolioValueDKK = parseInt(portfolioValueDKK, 10);
 
   await browser.close();
+
+  console.log("Portfolio value is: ", portfolioValueDKK);
+
+  console.log("Converting DKK to USD");
+  const url = `https://api.exchangerate.host/latest?base=DKK&symbols=USD`;
+  let req = await got(url);
+  const conversionResult = JSON.parse(req.body);
+  const conversationRate = conversionResult["rates"]["USD"];
+  let portfolioValueUSD = portfolioValueDKK * conversationRate;
+
+  console.log("conversationRate", conversationRate);
+  console.log("portfolioValueDKK", portfolioValueDKK);
+  console.log("portfolioValueUSD", portfolioValueUSD);
+
+  console.log("Updating Personal Capital");
+
+  // Update PersonalCapital
+  let pc = new PersonalCapital();
+
+  try {
+    console.log("Logging into Personal Capital");
+    await pc.login(process.env.USERNAME, process.env.PASSWORD);
+    console.log(".. Success");
+
+    console.log("Updating account balacne");
+    await pc.updateInvestmentCashBalance("51066090", portfolioValueUSD);
+    console.log(".. Success");
+
+    console.log("Done 👋");
+  } catch (err) {
+    console.log("err", err);
+    if (err.message == "2FA_required") {
+      console.log("2FA_required");
+      // // await pc.challangeTwoFactor(TwoFactorMode.SMS);
+      // await pc.enterTwoFactorCode(TwoFactorMode.SMS, "2104");
+      // await pc.login(process.env.USERNAME, process.env.PASSWORD);
+    }
+  }
 })();
